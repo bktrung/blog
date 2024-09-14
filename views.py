@@ -1,13 +1,12 @@
-from rest_framework import generics, status, permissions
-from rest_framework.response import Response
-from rest_framework.views import APIView
+from rest_framework import generics, permissions
 from django.db.models import Count
 from .models import Post, Comment, Reaction
 from .serializers import PostSummarySerializer, PostDetailSerializer, CommentSerializer, ReactionSerializer
-from django.core.exceptions import ValidationError
+from .pagination import PostPagination
 
 class PostListCreateView(generics.ListCreateAPIView):
     queryset = Post.objects.annotate(comment_count=Count('comments'))
+    pagination_class = PostPagination
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
     def get_serializer_class(self):
