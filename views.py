@@ -1,13 +1,38 @@
+import json
+from django.forms import ValidationError
+from django.http import HttpResponse
 from rest_framework import generics, permissions
-from django.db.models import Count
+from rest_framework.exceptions import NotFound, PermissionDenied
+from django.db.models import Count, Q
+from django.shortcuts import get_object_or_404
 from .models import Post, Comment, Reaction
 from .serializers import PostSummarySerializer, PostDetailSerializer, CommentSerializer, ReactionSerializer
 from .pagination import PostPagination
 
+class CustomJsonResponse(HttpResponse):
+    def __init__(self, data, **kwargs):
+        kwargs['content_type'] = 'application/json; charset=utf-8'
+        super().__init__(content=json.dumps(data, ensure_ascii=False), **kwargs)
+
+
 class PostListCreateView(generics.ListCreateAPIView):
-    queryset = Post.objects.annotate(comment_count=Count('comments'))
     pagination_class = PostPagination
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    
+    def get_queryset(self):
+        author_id = self.kwargs.get('author_id', None)
+
+        queryset = Post.objects.annotate(
+            comment_count=Count('comments', distinct=True),
+            like_count=Count('reactions', filter=Q(reactions__reaction_type=Reaction.ReactionType.LIKE)),
+            dislike_count=Count('reactions', filter=Q(reactions__reaction_type=Reaction.ReactionType.DISLIKE))
+        ).select_related('author').order_by('-updated_at')
+
+        if author_id == 'me':
+            return queryset.filter(author=self.request.user)
+        elif author_id:
+            return queryset.filter(author_id=author_id)
+        return queryset
 
     def get_serializer_class(self):
         if self.request.method == 'POST':
@@ -16,50 +41,70 @@ class PostListCreateView(generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)
+        
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        return CustomJsonResponse(response.data)
+
 
 class PostRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Post.objects.all()
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
     serializer_class = PostDetailSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
-
-    def perform_update(self, serializer):
-        serializer.save(author=self.request.user)
-
-# viet thua
-class PostCommentsView(generics.ListAPIView):
-    serializer_class = CommentSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
-        return Comment.objects.filter(post_id=self.kwargs['pk'], parent=None)
+        return Post.objects.annotate(
+            like_count=Count('reactions', filter=Q(reactions__reaction_type=Reaction.ReactionType.LIKE)),
+            dislike_count=Count('reactions', filter=Q(reactions__reaction_type=Reaction.ReactionType.DISLIKE))
+        ).select_related('author')
+
+    def perform_update(self, serializer):
+        if self.get_object().author != self.request.user:
+            raise PermissionDenied("You do not have permission to edit this post.")
+        
+        serializer.save(author=self.request.user)
+        
+    def retrieve(self, request, *args, **kwargs):
+        response = super().retrieve(request, *args, **kwargs)
+        return CustomJsonResponse(response.data)
+        
 
 class CommentListCreateView(generics.ListCreateAPIView):
     serializer_class = CommentSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
-        return Comment.objects.filter(post_id=self.kwargs['post_pk'])
+        post_id = self.kwargs.get('post_pk', None)
+        return Comment.objects.filter(post_id=post_id)
 
     def perform_create(self, serializer):
-        post = Post.objects.get(pk=self.kwargs['post_pk'])
+        post = get_object_or_404(Post, pk=self.kwargs.get('post_pk'))
         serializer.save(author=self.request.user, post=post)
+        
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        return CustomJsonResponse(response.data)
 
 class CommentRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Comment.objects.all()
     serializer_class = CommentSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
-
-    def perform_update(self, serializer):
-        serializer.save(author=self.request.user)
-
-class CommentReplyView(generics.CreateAPIView):
-    serializer_class = CommentSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    def perform_create(self, serializer):
-        parent_comment = Comment.objects.get(pk=self.kwargs['pk'])
-        post = parent_comment.post
-        serializer.save(author=self.request.user, post=post, parent=parent_comment)
+    def perform_update(self, serializer):
+        if self.get_object().author != self.request.user:
+            raise PermissionDenied("You do not have permission to edit this comment.")
+        
+        serializer.save()
+        
+    def perform_destroy(self, instance):
+        if instance.author != self.request.user:
+            raise PermissionDenied("You do not have permission to delete this comment.")
+        
+        instance.delete()
+        
+    def retrieve(self, request, *args, **kwargs):
+        response = super().retrieve(request, *args, **kwargs)
+        return CustomJsonResponse(response.data)
+
 
 class PostReactionsView(generics.ListCreateAPIView):
     serializer_class = ReactionSerializer
@@ -69,7 +114,11 @@ class PostReactionsView(generics.ListCreateAPIView):
         return Reaction.objects.filter(post_id=self.kwargs['post_pk'])
 
     def perform_create(self, serializer):
-        post = Post.objects.get(pk=self.kwargs['post_pk'])
+        try:
+            post = Post.objects.get(pk=self.kwargs['post_pk'])
+        except Post.DoesNotExist:
+            raise ValidationError("Post does not exist.")
+        
         serializer.save(author=self.request.user, post=post)
 
 class CommentReactionsView(generics.ListCreateAPIView):
@@ -80,7 +129,11 @@ class CommentReactionsView(generics.ListCreateAPIView):
         return Reaction.objects.filter(comment_id=self.kwargs['comment_pk'])
 
     def perform_create(self, serializer):
-        comment = Comment.objects.get(pk=self.kwargs['comment_pk'])
+        try:
+            comment = Comment.objects.get(pk=self.kwargs['comment_pk'])
+        except Comment.DoesNotExist:
+            raise ValidationError("Comment does not exist.")
+        
         serializer.save(author=self.request.user, comment=comment)
 
 class ReactionRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
@@ -89,4 +142,14 @@ class ReactionRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def perform_update(self, serializer):
-        serializer.save(author=self.request.user)
+        reaction = self.get_object()
+        if reaction.author != self.request.user:
+            raise PermissionDenied("You can only update your own reactions.")
+        
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if instance.author != self.request.user:
+            raise PermissionDenied("You can only delete your own reactions.")
+        
+        instance.delete()
