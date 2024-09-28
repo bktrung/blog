@@ -74,11 +74,14 @@ class CommentListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         post_id = self.kwargs.get('post_pk', None)
-        return Comment.objects.filter(post_id=post_id)
+        return Comment.objects.filter(post_id=post_id).annotate(
+            like_count=Count('reactions', filter=Q(reactions__reaction_type=Reaction.ReactionType.LIKE)),
+            dislike_count=Count('reactions', filter=Q(reactions__reaction_type=Reaction.ReactionType.DISLIKE))
+        )
 
     def perform_create(self, serializer):
         post = get_object_or_404(Post, pk=self.kwargs.get('post_pk'))
-        serializer.save(author=self.request.user, post=post)
+        serializer.save(author=self.request.user, post_id=post)
         
     def list(self, request, *args, **kwargs):
         response = super().list(request, *args, **kwargs)
@@ -105,36 +108,31 @@ class CommentRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
         response = super().retrieve(request, *args, **kwargs)
         return CustomJsonResponse(response.data)
 
-
-class PostReactionsView(generics.ListCreateAPIView):
+###
+class ReactionListCreateView(generics.ListCreateAPIView):
     serializer_class = ReactionSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
-
+    
     def get_queryset(self):
-        return Reaction.objects.filter(post_id=self.kwargs['post_pk'])
-
+        content_pk = self.kwargs.get('content_pk')
+        status = self.request.query_params.get('status', None)
+        if status:
+            return Reaction.objects.filter(content=content_pk, reaction_type=status)
+        return Reaction.objects.filter(content=content_pk)
+    
     def perform_create(self, serializer):
+        content_id = self.kwargs.get('content_pk')
+        content = None
+        user = self.request.user
         try:
-            post = Post.objects.get(pk=self.kwargs['post_pk'])
+            content = Post.objects.get(id=content_id)
         except Post.DoesNotExist:
-            raise ValidationError("Post does not exist.")
-        
-        serializer.save(author=self.request.user, post=post)
+            try:
+                content = Comment.objects.get(id=content_id)
+            except Comment.DoesNotExist:
+                raise ValidationError('Content not found.')
 
-class CommentReactionsView(generics.ListCreateAPIView):
-    serializer_class = ReactionSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
-
-    def get_queryset(self):
-        return Reaction.objects.filter(comment_id=self.kwargs['comment_pk'])
-
-    def perform_create(self, serializer):
-        try:
-            comment = Comment.objects.get(pk=self.kwargs['comment_pk'])
-        except Comment.DoesNotExist:
-            raise ValidationError("Comment does not exist.")
-        
-        serializer.save(author=self.request.user, comment=comment)
+        serializer.save(author=user, content=content)
 
 class ReactionRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Reaction.objects.all()

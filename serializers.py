@@ -10,9 +10,9 @@ class UserSerializer(serializers.ModelSerializer):
 
 class PostSummarySerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
-    comment_count = serializers.IntegerField(default=0)
-    like_count = serializers.IntegerField(default=0)
-    dislike_count = serializers.IntegerField(default=0)
+    comment_count = serializers.IntegerField(read_only=True, default=0)
+    like_count = serializers.IntegerField(read_only=True, default=0)
+    dislike_count = serializers.IntegerField(read_only=True, default=0)
     
     class Meta:
         model = Post
@@ -21,8 +21,8 @@ class PostSummarySerializer(serializers.ModelSerializer):
 
 class PostDetailSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
-    like_count = serializers.IntegerField(default=0)
-    dislike_count = serializers.IntegerField(default=0)
+    like_count = serializers.IntegerField(read_only=True, default=0)
+    dislike_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = Post
@@ -31,13 +31,13 @@ class PostDetailSerializer(serializers.ModelSerializer):
 
 class CommentSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
-    like_count = serializers.SerializerMethodField()
-    dislike_count = serializers.SerializerMethodField()
+    like_count = serializers.IntegerField(read_only=True, default=0)
+    dislike_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = Comment
-        fields = ['id', 'content', 'author', 'post', 'created_at', 'updated_at', 'like_count', 'dislike_count']
-        read_only_fields = ['post', 'created_at']
+        fields = ['id', 'content', 'author', 'post_id', 'created_at', 'updated_at', 'like_count', 'dislike_count']
+        read_only_fields = ['post_id', 'created_at']
 
 
 class ReactionSerializer(serializers.ModelSerializer):
@@ -45,5 +45,5 @@ class ReactionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Reaction
-        fields = ['id', 'reaction_type', 'author', 'post', 'comment', 'created_at']
-        read_only_fields = ['post', 'comment', 'created_at']
+        fields = ['id', 'reaction_type', 'author', 'content', 'created_at']
+        read_only_fields = ['content', 'created_at']
